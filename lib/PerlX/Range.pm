@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use 5.010;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 use PPI;
 use PPI::Document;
@@ -14,7 +14,7 @@ use B::OPCheck ();
 sub __const_check {
     my $op = shift;
     my $offset = Devel::Declare::get_linestr_offset;
-    # $offset += Devel::Declare::toke_skipspace($offset);
+    $offset += Devel::Declare::toke_skipspace($offset);
     my $linestr = Devel::Declare::get_linestr;
     my $code = substr($linestr, $offset);
 
@@ -43,12 +43,10 @@ sub __const_check {
             $pnode = $pnode->parent;
         }
 
-        $code .= $start->content . "+" . "PerlX::Range->new(end => @{[ $end->content ]})";
+        $code .= ($start ? $start->content : "") . "+" . "PerlX::Range->new(last => @{[ $end->content ]})";
     }
 
-    # say $linestr;
     substr($linestr, $offset, length($original_code) - 2 ) = $code;
-    # say $linestr;
     Devel::Declare::set_linestr($linestr);
 };
 
@@ -63,12 +61,12 @@ sub import {
 use overload
     '+' => sub {
         my $self = shift;
-        $self->{start} = $_[0];
+        $self->{first} = $_[0];
         return $self;
     },
     '""' => sub {
         my $self = shift;
-        return $self->{start} . ".." . $self->{end};
+        return $self->{first} . ".." . $self->{last};
     };
 
 sub new {
@@ -76,16 +74,31 @@ sub new {
     return bless {%args}, $class;
 }
 
+sub items {
+    $_[0]->{last} - $_[0]->{first} + 1
+}
+
+sub first {
+    $_[0]->{first}
+}
+
+sub last {
+    $_[0]->{last}
+}
+
+*min = *from = \&first;
+*max = *to   = \&last;
+
 sub each {
     my $cb = pop;
     my $self = shift;
 
-    my $current = $self->{current} ||= $self->{start};
-    if ($current > $self->{end}) {
+    my $current = $self->{current} ||= $self->{first};
+    if ($current > $self->{last}) {
         delete $self->{current};
         return;
     }
-    while($current <= $self->{end}) {
+    while($current <= $self->{last}) {
         local $_ = $current;
         my $ret = $cb->($self, $_);
         last if (defined($ret) && !$ret);
@@ -99,15 +112,47 @@ __END__
 
 =head1 NAME
 
-PerlX::Range -
+PerlX::Range - Lazy Range object in Perl 5
 
 =head1 SYNOPSIS
 
+  use PerlX::MethodCallWithBlock;
   use PerlX::Range;
+
+  my $a = 1..5000;
+
+  $a->each {
+      # $_ is the current value
+
+      return 0 if should_break($_);
+  };
 
 =head1 DESCRIPTION
 
-PerlX::Range is
+PerlX::Range is an attemp to implement make range operator lazy. When you say:
+
+    my $a = 1..10;
+
+This `$a` variable is then now a C<PerlX::Range> object.
+
+=head1 METHODS
+
+=over 4
+
+=item min, from, first
+
+Retrieve the minimum value of the range.
+
+=item max, to, last
+
+Retrieve the maximum value of the range.
+
+=item each($cb)
+
+Iterate over the range one by one, the C<$cb> should be a code
+ref. Inside the body of that, C<$_> refers to the current value.
+
+=back
 
 =head1 AUTHOR
 
