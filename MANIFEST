@@ -16,10 +16,13 @@ MANIFEST			This list of files
 META.yml
 README
 t/00_compile.t
+t/by.t
 t/char.t
 t/iter.t
 t/num.t
+t/open-bound.t
 t/simple.t
+t/to_a.t
 xt/01_podspell.t
 xt/02_perlcritic.t
 xt/03_pod.t
