@@ -1,4 +1,5 @@
 Changes
+examples/num.pl
 inc/Module/Install.pm
 inc/Module/Install/AuthorTests.pm
 inc/Module/Install/Base.pm
@@ -20,6 +21,7 @@ t/by.t
 t/char.t
 t/iter.t
 t/num.t
+t/open-bound-with-by.t
 t/open-bound.t
 t/simple.t
 t/to_a.t

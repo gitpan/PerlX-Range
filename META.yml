@@ -16,6 +16,7 @@ meta-spec:
 name: PerlX-Range
 no_index:
   directory:
+    - examples
     - inc
     - t
     - xt
@@ -23,4 +24,4 @@ requires:
   perl: 5.10.0
 resources:
   license: http://opensource.org/licenses/mit-license.php
-version: 0.03
+version: 0.04

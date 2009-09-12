@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use 5.010;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 use PPI;
 use PPI::Document;
@@ -51,10 +51,11 @@ sub __const_check {
         }
         elsif ($end_content eq '*:') {
             my $selector = $end->snext_sibling;
-            say "XXX: $selector";
             if ($selector->content eq 'by') {
                 my $selector_arg = $selector->snext_sibling;
-                say "XXX: $selector_arg";
+                if ($selector_arg && "$selector_arg" =~ /\((\d+)\)/) {
+                    $obj_arguments->{by} = $1;
+                }
             }
             else {
                 die("Unknown Range syntax: $selector");
