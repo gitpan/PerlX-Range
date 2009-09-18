@@ -3,112 +3,16 @@ package PerlX::Range;
 use strict;
 use warnings;
 use 5.010;
+use B::Hooks::OP::Check;
+use B::Hooks::EndOfScope;
 
-our $VERSION = '0.04';
-
-use PPI;
-use PPI::Document;
-use Devel::Declare ();
-use B::OPCheck ();
-
-sub __const_check {
-    my $op = shift;
-    my $offset = Devel::Declare::get_linestr_offset;
-    $offset += Devel::Declare::toke_skipspace($offset);
-    my $linestr = Devel::Declare::get_linestr;
-    my $code = substr($linestr, $offset);
-
-    my $doc = PPI::Document->new(\$code);
-    $doc->index_locations;
-    my $found = $doc->find(
-        sub {
-            my $node = $_[1];
-            $node->content eq '..' && $node->class eq 'PPI::Token::Operator';
-        }
-    );
-    return unless $found;
-
-    my $obj_arguments = {};
-    my $original_code = $code;
-    $code = "";
-    for my $op_range (@$found) {
-        my $start = $op_range->sprevious_sibling;
-        my $end = $op_range->snext_sibling;
-
-        my $pnode = $op_range->sprevious_sibling;
-        while($pnode) {
-            my $prev_node = $pnode;
-            while ($prev_node = $prev_node->previous_sibling) {
-                $code = $prev_node->content . $code;
-            }
-            $pnode = $pnode->parent;
-        }
-
-        my $end_content = $end->content;
-
-        if ($end_content eq '*') {
-            $end_content = '"*"';
-        }
-        elsif ($end_content eq '*:') {
-            my $selector = $end->snext_sibling;
-            if ($selector->content eq 'by') {
-                my $selector_arg = $selector->snext_sibling;
-                if ($selector_arg && "$selector_arg" =~ /\((\d+)\)/) {
-                    $obj_arguments->{by} = $1;
-                }
-            }
-            else {
-                die("Unknown Range syntax: $selector");
-            }
-            $end_content = '"*"';
-        }
-        else {
-            my $colon = $end->snext_sibling;
-            if ($colon->content eq ':') {
-                my $selector = $colon->snext_sibling;
-                if ($selector && $selector->content eq 'by') {
-                    my $selector_arg = $selector->snext_sibling;
-                    if ($selector_arg && "$selector_arg" =~ /\((\d+)\)/) {
-                        $obj_arguments->{by} = $1;
-                    }
-                }
-                else {
-                    die("Unknown Range syntax: $selector");
-                }
-            }
-        }
-
-        $obj_arguments->{last} = $end_content;
-
-        my $argument_string = "";
-        for (keys %$obj_arguments) {
-            $argument_string .= "$_ => " . $obj_arguments->{$_} . ", ";
-        }
-        $code .= ($start ? $start->content : "") . "+" . "PerlX::Range->new($argument_string)";
-    }
-
-    substr($linestr, $offset, length($original_code) - 2 ) = $code;
-    Devel::Declare::set_linestr($linestr);
-};
-
-sub import {
-    my $offset  = Devel::Declare::get_linestr_offset();
-    my $linestr = Devel::Declare::get_linestr();
-
-    substr($linestr, $offset, 0) = q[BEGIN { B::OPCheck->import($_ => check => \&PerlX::Range::__const_check) for qw(const); }];
-    Devel::Declare::set_linestr($linestr);
-}
+our $VERSION = '0.05';
 
 use overload
     '@{}' => sub {
         my $self = shift;
         my @a = $self->to_a;
         return \@a;
-    },
-    '+' => sub {
-        my $self = shift;
-        $self->{first} = $_[0];
-        return $self;
     },
     '""' => sub {
         my $self = shift;
@@ -117,11 +21,21 @@ use overload
 
 sub new {
     my ($class, %args) = @_;
-    return bless {%args}, $class;
+    my $self = bless {%args}, $class;
+    $self->{current} = $self->min;
+    $self->{by} = 1;
+    return $self;
+}
+
+sub xrange {
+    my ($first, $last) = @_;
+    return __PACKAGE__->new(first => $first, last => $last);
 }
 
 sub items {
-    $_[0]->{last} - $_[0]->{first} + 1
+    my $self = shift;
+    use integer;
+    return ($self->{last} - $self->{first})/($self->{by}) + 1
 }
 
 sub first {
@@ -142,6 +56,12 @@ sub to_a {
     return @r;
 }
 
+sub by {
+    my ($self, $n) = @_;
+    $self->{by} = $n if $n;
+    return $self;
+}
+
 sub each {
     my $cb = pop;
     my $self = shift;
@@ -153,6 +73,39 @@ sub each {
         last if (defined($ret) && !$ret);
         $current += $self->{by} ? $self->{by} : 1;
     }
+}
+
+sub next {
+    my $self = shift;
+
+    if ($self->{current} > $self->max) {
+        $self->{current} = $self->min;
+        return;
+    }
+    $self->{current} += 1;
+    return $self->{current}-1;
+}
+
+require XSLoader;
+XSLoader::load('PerlX::Range', $VERSION);
+
+sub import {
+    return if $^H{PerlXRange};
+
+    feature->import(':5.10');
+    $^H &= 0x00020000;
+    $^H{PerlXRange} = 1;
+
+    add_flop_hook();
+    on_scope_end {
+        remove_flop_hook();
+    };
+}
+
+sub unimport {
+    remove_flop_hook();
+    $^H &= ~0x00020000;
+    delete $^H{PerlXRange};
 }
 
 
@@ -184,19 +137,37 @@ PerlX::Range is an attemp to implement make range operator lazy. When you say:
 
 This `$a` variable is then now a C<PerlX::Range> object.
 
+Notice here that it's `$a` but not `@a`. C<PerlX::Range> overrides the
+behavior of `..` operator to construct one C<PerlX::Range> object. You
+can deparse it to see what it's changed to:
+
+    > perl -MPerlX::Range -MO=Deparse -e '$a=1..3'
+    BEGIN {
+        $^H{'feature_say'} = q(1);
+        $^H{'feature_state'} = q(1);
+        $^H{'feature_switch'} = q(1);
+        $^H{'PerlXRange'} = q(1);
+    }
+    $a = PerlX::Range::xrange(1, 3);
+    -e syntax OK
+
+It also enables those 5.10 features for its caller, for the love of
+them.
+
 At this point the begin of range can only be a constant, and better
 only be a number literal.
 
-The end of the range can be a number, or a asterisk C<*>, which means
-"whatever", or Inf. This syntax is stolen from Perl6.
+At this point the min/max value of range are assumed to be numeric
+literals or variables.
 
-After the end of range, it optionally take a C<:by(N)> modifier, where
-N can be a number literal. This syntax is also stolen from Perl6.
+=head1 THE SYNTAX
 
-Therefore, this is how you represent all odd numbers:
-
-    my $odd = 1..*:by(2);
-
+The 0.04 version of C<PerlX::Range> added the syntax of using C<*> and
+C<:by(x)> like Perl6, however, they are temporarily removed in the
+current version due to a total re-write of C<PerlX::Range> with
+XS. The XS based implementation should work less problematic and
+robust. However, it's more difficult to extend syntax with pure XS.  I
+still suck at XS, so github pull requests are very welcome. :)
 
 =head1 METHODS
 
@@ -219,13 +190,26 @@ If you want to stop before it reach the end of the range, or you have
 to because the range is infinite, you need to say C<return 0>. A
 defined false value from C<$cb> will make the iteration stop.
 
+=item by($x)
+
+Specify the step distance. So Here's how you define some odd numbers:
+
+    # 1, 3, 5, 7, 9
+    my $a = 1..10;
+    $a->by(2);
+
+Or, in one line:
+
+    my $a = (1..10)->by(2);
+
+Due to the fact that C<< -> >> operator is tighter then C<..>,
+C<1..10> needs to be written in a pair of parens.
+
 =back
 
 =head1 AUTHOR
 
 Kang-min Liu E<lt>gugod@gugod.orgE<gt>
-
-=head1 SEE ALSO
 
 =head1 LICENSE AND COPYRIGHT
 

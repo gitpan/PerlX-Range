@@ -21,7 +21,8 @@ no_index:
     - t
     - xt
 requires:
+  B::Hooks::EndOfScope: 0
   perl: 5.10.0
 resources:
   license: http://opensource.org/licenses/mit-license.php
-version: 0.04
+version: 0.05
